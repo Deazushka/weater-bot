@@ -14,6 +14,10 @@ except ImportError:
 # ─── Telegram ──────────────────────────────────────────────────────────────────
 BOT_TOKEN: str = os.environ.get("BOT_TOKEN", "")
 
+# ─── Хостинг (PaaS Ping) ───────────────────────────────────────────────────────
+# URL приложения для предотвращения засыпания (например на Koyeb/Render)
+APP_URL: str = os.environ.get("APP_URL", "")
+
 # ─── OpenWeatherMap API ────────────────────────────────────────────────────────
 OWM_API_KEY: str = os.environ.get("OWM_API_KEY", "")
 OWM_BASE_URL = "https://api.openweathermap.org/data/2.5"
