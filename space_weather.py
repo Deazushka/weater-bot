@@ -7,7 +7,7 @@ space_weather.py — Интеграция с NOAA SWPC API
   - Классификация магнитной бури
 """
 
-import requests
+import aiohttp
 from typing import Optional
 
 import config
@@ -69,77 +69,68 @@ def get_storm_advice(kp: float, bp_type: str = "norm") -> str:
 
 # ─── Получение данных NOAA ────────────────────────────────────────────────────
 
-def get_kp_index() -> Optional[float]:
+async def get_kp_index() -> Optional[float]:
     """
     Возвращает последнее измеренное значение Kp-индекса.
-
-    Источник: планетарный K-индекс NOAA (1-минутные данные).
-
-    Returns:
-        float или None при ошибке
     """
     try:
-        resp = requests.get(config.NOAA_KP_URL, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        # Данные — список записей [timestamp, Kp]. Берём последнюю непустую.
-        for entry in reversed(data):
-            kp_val = entry.get("kp_index") if isinstance(entry, dict) else (
-                entry[1] if isinstance(entry, list) and len(entry) > 1 else None
-            )
-            if kp_val is not None:
-                return float(kp_val)
-        return None
+        async with aiohttp.ClientSession() as session:
+            async with session.get(config.NOAA_KP_URL, timeout=10) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+                # Данные — список записей [timestamp, Kp]. Берём последнюю непустую.
+                for entry in reversed(data):
+                    kp_val = entry.get("kp_index") if isinstance(entry, dict) else (
+                        entry[1] if isinstance(entry, list) and len(entry) > 1 else None
+                    )
+                    if kp_val is not None:
+                        return float(kp_val)
+                return None
     except Exception:
         return None
 
 
-def get_kp_full() -> Optional[dict]:
+async def get_kp_full() -> Optional[dict]:
     """
     Возвращает текущий Kp с классификацией.
-
-    Returns:
-        dict: {kp, level, emoji, label, storm_class} или None
     """
-    kp = get_kp_index()
+    kp = await get_kp_index()
     if kp is None:
         return None
     storm = classify_storm(kp)
     return {"kp": kp, **storm}
 
 
-def get_kp_forecast() -> Optional[list[dict]]:
+async def get_kp_forecast() -> Optional[list[dict]]:
     """
     Возвращает прогноз Kp на ближайшие 24 ч.
-
-    Returns:
-        list[dict]: [{time_tag, kp, ...}] или None при ошибке
     """
     try:
-        resp = requests.get(config.NOAA_KP_FORECAST, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        result = []
-        for entry in data[:24]:  # первые 24 записи (по 1 ч)
-            if isinstance(entry, dict):
-                kp_val = entry.get("kp")
-                ts     = entry.get("time_tag", "")
-            elif isinstance(entry, list) and len(entry) >= 2:
-                ts, kp_val = entry[0], entry[1]
-            else:
-                continue
-            if kp_val is None:
-                continue
-            kp_f = float(kp_val)
-            result.append({"time_tag": ts, "kp": kp_f, **classify_storm(kp_f)})
-        return result if result else None
+        async with aiohttp.ClientSession() as session:
+            async with session.get(config.NOAA_KP_FORECAST, timeout=10) as resp:
+                resp.raise_for_status()
+                data = await resp.json()
+                result = []
+                for entry in data[:24]:  # первые 24 записи (по 1 ч)
+                    if isinstance(entry, dict):
+                        kp_val = entry.get("kp")
+                        ts     = entry.get("time_tag", "")
+                    elif isinstance(entry, list) and len(entry) >= 2:
+                        ts, kp_val = entry[0], entry[1]
+                    else:
+                        continue
+                    if kp_val is None:
+                        continue
+                    kp_f = float(kp_val)
+                    result.append({"time_tag": ts, "kp": kp_f, **classify_storm(kp_f)})
+                return result if result else None
     except Exception:
         return None
 
 
-def get_max_kp_forecast_24h() -> Optional[float]:
+async def get_max_kp_forecast_24h() -> Optional[float]:
     """Возвращает максимальный ожидаемый Kp за следующие 24 ч."""
-    forecast = get_kp_forecast()
+    forecast = await get_kp_forecast()
     if not forecast:
         return None
     return max(e["kp"] for e in forecast)
