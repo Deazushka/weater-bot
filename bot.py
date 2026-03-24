@@ -546,7 +546,7 @@ async def main():
     # Запускаем всё параллельно
     await asyncio.gather(
         run_http_server(port),
-        bot.infinity_polling(timeout=30, long_polling_timeout=30),
+        bot.infinity_polling(timeout=30),
         ping_itself(),
         scheduler.run_scheduler(),
     )
