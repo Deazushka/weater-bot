@@ -7,12 +7,15 @@ scheduler.py — Фоновый планировщик HeadCare Bot
   - Проверка «барической пилы» каждые 6 ч
 """
 
-import asyncio
+import threading
+import time
 import logging
 from datetime import datetime
 from typing import Optional
 
+import schedule
 import pytz
+import requests
 
 import db
 import weather as wx
@@ -30,52 +33,39 @@ _bot = None
 
 def start(bot) -> None:
     """
-    Инициализирует планировщик. В асинхронной версии задачи запускаются в main().
+    Запускает фоновый поток с планировщиком задач.
 
     Args:
-        bot: экземпляр telebot.async_telebot.AsyncTeleBot
+        bot: экземпляр telebot.TeleBot
     """
     global _bot
     _bot = bot
-    logger.info("Планировщик инициализирован.")
+
+    # Экстренный Kp-алерт — каждые N часов
+    schedule.every(config.KP_CHECK_INTERVAL_HOURS).hours.do(_job_kp_alerts)
+
+    # Барическая пила — каждые N часов
+    schedule.every(config.PRESSURE_CHECK_INTERVAL_HOURS).hours.do(_job_barometric_check)
+
+    # Ежедневные сводки — каждую минуту сравниваем HH:MM с настройками пользователей
+    schedule.every(1).minutes.do(_job_daily_digests)
+
+    # Self-ping (каждые 4 минуты), чтобы Koyeb не усыплял Web-сервис
+    if config.APP_URL:
+        schedule.every(4).minutes.do(_job_self_ping)
+
+    t = threading.Thread(target=_run_loop, daemon=True)
+    t.start()
+    logger.info("Планировщик запущен.")
 
 
-async def run_scheduler():
-    """Запускает бесконечные циклы для фоновых задач."""
-    logger.info("Циклы планировщика запущены.")
-    await asyncio.gather(
-        _kp_alerts_loop(),
-        _barometric_check_loop(),
-        _daily_digests_loop(),
-    )
-
-
-async def _kp_alerts_loop():
+def _run_loop() -> None:
     while True:
         try:
-            await _job_kp_alerts()
+            schedule.run_pending()
         except Exception as e:
-            logger.error(f"Ошибка в _kp_alerts_loop: {e}")
-        await asyncio.sleep(config.KP_CHECK_INTERVAL_HOURS * 3600)
-
-
-async def _barometric_check_loop():
-    while True:
-        try:
-            await _job_barometric_check()
-        except Exception as e:
-            logger.error(f"Ошибка в _barometric_check_loop: {e}")
-        await asyncio.sleep(config.PRESSURE_CHECK_INTERVAL_HOURS * 3600)
-
-
-async def _daily_digests_loop():
-    while True:
-        try:
-            await _job_daily_digests()
-        except Exception as e:
-            logger.error(f"Ошибка в _daily_digests_loop: {e}")
-        # Проверяем каждую минуту
-        await asyncio.sleep(60)
+            logger.error(f"Ошибка в планировщике: {e}")
+        time.sleep(30)
 
 
 # ─── Вспомогательные функции ──────────────────────────────────────────────────
@@ -102,13 +92,10 @@ def _is_quiet_hour(chat_id: int) -> bool:
     return start_h <= local_hour < end_h
 
 
-async def _send_safe(chat_id: int, text: str, **kwargs) -> None:
+def _send_safe(chat_id: int, text: str, **kwargs) -> None:
     """Отправляет сообщение, подавляя исключения."""
-    if _bot is None:
-        logger.error("Попытка отправить сообщение до инициализации _bot в планировщике.")
-        return
     try:
-        await _bot.send_message(chat_id, text, parse_mode="HTML", **kwargs)
+        _bot.send_message(chat_id, text, parse_mode="HTML", **kwargs)
     except Exception as e:
         logger.warning(f"Не удалось отправить сообщение {chat_id}: {e}")
 
@@ -128,9 +115,9 @@ def _user_local_time_str(chat_id: int) -> Optional[str]:
 
 # ─── Задачи ────────────────────────────────────────────────────────────────────
 
-async def _job_kp_alerts() -> None:
+def _job_kp_alerts() -> None:
     """Рассылает экстренные алерты при превышении Kp-порога."""
-    kp_data = await sw.get_kp_full()
+    kp_data = sw.get_kp_full()
     if not kp_data:
         return
 
@@ -156,10 +143,9 @@ async def _job_kp_alerts() -> None:
             f"💬 {advice}"
         )
         _send_safe(chat_id, text)
-        await _send_safe(chat_id, text)
 
 
-async def _job_barometric_check() -> None:
+def _job_barometric_check() -> None:
     """Проверяет резкий перепад давления для всех пользователей с городом."""
     users = db.get_all_users()
 
@@ -171,7 +157,7 @@ async def _job_barometric_check() -> None:
         if _is_quiet_hour(chat_id):
             continue
 
-        data = await wx.get_weather_by_city(city)
+        data = wx.get_weather_by_city(city)
         if not data or not data.get("pressure_mmhg"):
             continue
 
@@ -184,10 +170,10 @@ async def _job_barometric_check() -> None:
                 f"Текущее давление: <b>{data['pressure_mmhg']} мм рт.ст.</b>\n\n"
                 "Резкий перепад — частый триггер головных болей. Берегите себя 🌿"
             )
-            await _send_safe(chat_id, text)
+            _send_safe(chat_id, text)
 
 
-async def _job_daily_digests() -> None:
+def _job_daily_digests() -> None:
     """Рассылает ежедневные сводки пользователям в их заданное время."""
     configs  = db.get_all_alert_configs()
 
@@ -201,10 +187,10 @@ async def _job_daily_digests() -> None:
         if _is_quiet_hour(chat_id):
             continue
 
-        await _send_daily_digest(chat_id)
+        _send_daily_digest(chat_id)
 
 
-async def _send_daily_digest(chat_id: int) -> None:
+def _send_daily_digest(chat_id: int) -> None:
     """Формирует и отправляет ежедневную сводку одному пользователю."""
     user = db.get_user(chat_id)
     if not user:
@@ -212,7 +198,7 @@ async def _send_daily_digest(chat_id: int) -> None:
     city    = user.get("city")
     bp_type = user.get("blood_pressure_type", "norm")
 
-    kp_data = await sw.get_kp_full()
+    kp_data = sw.get_kp_full()
     kp_str  = (
         f'{kp_data["emoji"]} {kp_data["label"]} (Kp = {kp_data["kp"]})'
         if kp_data else "—"
@@ -221,7 +207,7 @@ async def _send_daily_digest(chat_id: int) -> None:
     lines = ["🌅 <b>Ваша ежедневная метео-сводка</b>", ""]
 
     if city:
-        data = await wx.get_full_weather(city)
+        data = wx.get_full_weather(city)
         if data:
             lines += [
                 f"📍 <b>{city}</b>",
@@ -239,19 +225,31 @@ async def _send_daily_digest(chat_id: int) -> None:
         lines += ["", f"💬 {advice}"]
 
     # Прогноз Kp на 24 ч
-    max_kp = await sw.get_max_kp_forecast_24h()
-    if max_kp is not None:
-        max_kp_val = float(max_kp)
-        if max_kp_val >= 4:
-            fc_storm = sw.classify_storm(max_kp_val)
-            lines += [
-                "",
-                f"⚡️ <b>Прогноз:</b> завтра ожидается {fc_storm['emoji']} {fc_storm['label']} "
-                f"(max Kp = {max_kp_val}). Будьте осторожны!",
-            ]
+    max_kp = sw.get_max_kp_forecast_24h()
+    if max_kp is not None and max_kp >= 4:
+        fc_storm = sw.classify_storm(max_kp)
+        lines += [
+            "",
+            f"⚡️ <b>Прогноз:</b> завтра ожидается {fc_storm['emoji']} {fc_storm['label']} "
+            f"(max Kp = {max_kp}). Будьте осторожны!",
+        ]
 
-    await _send_safe(chat_id, "\n".join(lines))
+    _send_safe(chat_id, "\n".join(lines))
 
 
-# Удалено: _job_self_ping (перенесено в bot.py)
+def _job_self_ping() -> None:
+    """Пингует собственный веб-сервер, чтобы PaaS (Koyeb) не усыплял его из-за бездействия."""
+    url = config.APP_URL
+    if not url:
+        return
+
+    # Добавляем протокол, если он отсутствует
+    if not url.startswith(("http://", "https://")):
+        url = f"https://{url}"
+
+    try:
+        r = requests.get(url, timeout=5)
+        logger.debug(f"Self-ping {url}: {r.status_code}")
+    except Exception as e:
+        logger.warning(f"Ошибка при self-ping: {e}")
 

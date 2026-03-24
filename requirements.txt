@@ -3,4 +3,3 @@ requests
 schedule
 pytz
 python-dotenv
-aiohttp

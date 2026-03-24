@@ -6,13 +6,10 @@ bot.py — Точка входа HeadCare Bot (Telegram)
 """
 
 import logging
-import asyncio
-import os
-import aiohttp
-from aiohttp import web
-import socket
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from telebot.async_telebot import AsyncTeleBot
+import telebot
 from telebot import types
 from datetime import datetime
 from typing import Optional
@@ -35,7 +32,7 @@ logger = logging.getLogger(__name__)
 config.validate_config()
 db.init_db()
 
-bot = AsyncTeleBot(config.BOT_TOKEN, parse_mode="HTML")
+bot = telebot.TeleBot(config.BOT_TOKEN, parse_mode="HTML")
 
 # ─── Вспомогательные функции ──────────────────────────────────────────────────
 
@@ -59,13 +56,13 @@ def _get_user_city(chat_id: int) -> Optional[str]:
     return user["city"] if user else None
 
 
-async def _weather_summary(city: str, chat_id: Optional[int] = None) -> str:
+def _weather_summary(city: str, chat_id: Optional[int] = None) -> str:
     """Формирует HTML-сводку погоды + AQI + Kp."""
-    data = await wx.get_full_weather(city)
+    data = wx.get_full_weather(city)
     if not data:
         return f"❌ Не удалось получить погоду для <b>{city}</b>. Проверьте название города."
 
-    kp_data = await sw.get_kp_full()
+    kp_data = sw.get_kp_full()
     
     # Персональный совет
     bp_type = "norm"
@@ -103,12 +100,12 @@ async def _weather_summary(city: str, chat_id: Optional[int] = None) -> str:
 # ─── /start ────────────────────────────────────────────────────────────────────
 
 @bot.message_handler(commands=["start"])
-async def cmd_start(msg: types.Message) -> None:
+def cmd_start(msg: types.Message) -> None:
     chat_id = msg.chat.id
     name    = msg.from_user.first_name or "друг"
     db.upsert_user(chat_id)
     db.save_alert_config(chat_id)
-    await bot.send_message(
+    bot.send_message(
         chat_id,
         f"👋 Привет, <b>{name}</b>!\n\n"
         "Я <b>HeadCare Bot</b> — твой личный метео-ассистент.\n"
@@ -122,54 +119,54 @@ async def cmd_start(msg: types.Message) -> None:
 # ─── /weather ─────────────────────────────────────────────────────────────────
 
 @bot.message_handler(commands=["weather"])
-async def cmd_weather(msg: types.Message) -> None:
+def cmd_weather(msg: types.Message) -> None:
     city = _get_user_city(msg.chat.id)
     if city:
-        await _send_weather(msg.chat.id, city)
+        _send_weather(msg.chat.id, city)
     else:
-        await bot.send_message(msg.chat.id, "🌍 Введи название города:")
+        bot.send_message(msg.chat.id, "🌍 Введи название города:")
         bot.register_next_step_handler(msg, _step_set_city_and_weather)
 
 
-async def _step_set_city_and_weather(msg: types.Message) -> None:
+def _step_set_city_and_weather(msg: types.Message) -> None:
     city = msg.text.strip()
     db.upsert_user(msg.chat.id, city=city)
     db.save_alert_config(msg.chat.id)
-    await _send_weather(msg.chat.id, city)
+    _send_weather(msg.chat.id, city)
 
 
-async def _send_weather(chat_id: int, city: str) -> None:
+def _send_weather(chat_id: int, city: str) -> None:
     """Отправляет полную сводку (без ASCII-арта)."""
-    summary = await _weather_summary(city, chat_id)
+    summary = _weather_summary(city, chat_id)
     if summary.startswith("❌ Не удалось получить погоду"):
-        await bot.send_message(chat_id, summary, reply_markup=_main_menu())
+        bot.send_message(chat_id, summary, reply_markup=_main_menu())
         db.upsert_user(chat_id, city=None) # Сбрасываем неверный город
-        await bot.send_message(chat_id, "🌍 Пожалуйста, введи корректное название города:")
+        bot.send_message(chat_id, "🌍 Пожалуйста, введи корректное название города:")
         bot.register_next_step_handler_by_chat_id(chat_id, _step_set_city_and_weather)
     else:
-        await bot.send_message(chat_id, summary, reply_markup=_main_menu())
+        bot.send_message(chat_id, summary, reply_markup=_main_menu())
 
 
 # ─── /status ──────────────────────────────────────────────────────────────────
 
 @bot.message_handler(commands=["status"])
-async def cmd_status(msg: types.Message) -> None:
+def cmd_status(msg: types.Message) -> None:
     city = _get_user_city(msg.chat.id)
     if not city:
-        await bot.send_message(
+        bot.send_message(
             msg.chat.id,
             "Сначала задай город через /profile или кнопку «🌤 Погода».",
             reply_markup=_main_menu(),
         )
         return
-    summary = await _weather_summary(city, msg.chat.id)
-    await bot.send_message(msg.chat.id, summary, reply_markup=_main_menu())
+    summary = _weather_summary(city, msg.chat.id)
+    bot.send_message(msg.chat.id, summary, reply_markup=_main_menu())
 
 
 # ─── /profile ─────────────────────────────────────────────────────────────────
 
 @bot.message_handler(commands=["profile"])
-async def cmd_profile(msg: types.Message) -> None:
+def cmd_profile(msg: types.Message) -> None:
     kb = types.InlineKeyboardMarkup()
     kb.row(
         types.InlineKeyboardButton("❤️ Гипертония",  callback_data="bp_hyper"),
@@ -180,7 +177,7 @@ async def cmd_profile(msg: types.Message) -> None:
     current = config.BLOOD_PRESSURE_TYPES.get(
         user.get("blood_pressure_type", "norm") if user else "norm", "нормотония"
     )
-    await bot.send_message(
+    bot.send_message(
         msg.chat.id,
         f"Текущий профиль: <b>{current}</b>\n\nВыбери тип артериального давления:",
         reply_markup=kb,
@@ -188,13 +185,13 @@ async def cmd_profile(msg: types.Message) -> None:
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("bp_"))
-async def cb_blood_pressure(call: types.CallbackQuery) -> None:
+def cb_blood_pressure(call: types.CallbackQuery) -> None:
     bp_map = {"bp_hyper": "hyper", "bp_hypo": "hypo", "bp_norm": "norm"}
     bp_type = bp_map.get(call.data, "norm")
     db.upsert_user(call.message.chat.id, blood_pressure_type=bp_type)
     label   = config.BLOOD_PRESSURE_TYPES[bp_type]
-    await bot.answer_callback_query(call.id, f"Профиль обновлён: {label}")
-    await bot.edit_message_text(
+    bot.answer_callback_query(call.id, f"Профиль обновлён: {label}")
+    bot.edit_message_text(
         f"✅ Профиль сохранён: <b>{label}</b>",
         call.message.chat.id,
         call.message.message_id,
@@ -204,9 +201,9 @@ async def cb_blood_pressure(call: types.CallbackQuery) -> None:
 # ─── /alerts ──────────────────────────────────────────────────────────────────
 
 @bot.message_handler(commands=["alerts"])
-async def cmd_alerts(msg: types.Message) -> None:
+def cmd_alerts(msg: types.Message) -> None:
     cfg = db.get_alert_config(msg.chat.id) or {}
-    await bot.send_message(
+    bot.send_message(
         msg.chat.id,
         f"⚙️ <b>Настройки уведомлений</b>\n\n"
         f"Kp-порог:     <b>{cfg.get('kp_threshold', 5.0)}</b>\n"
@@ -218,7 +215,7 @@ async def cmd_alerts(msg: types.Message) -> None:
     bot.register_next_step_handler(msg, _step_alert_kp)
 
 
-async def _step_alert_kp(msg: types.Message) -> None:
+def _step_alert_kp(msg: types.Message) -> None:
     kp = None
     if msg.text.strip().lower() != "skip":
         try:
@@ -226,11 +223,11 @@ async def _step_alert_kp(msg: types.Message) -> None:
             if not (1 <= kp <= 9):
                 raise ValueError
         except ValueError:
-            await bot.send_message(msg.chat.id, "❌ Неверное значение. Введи число от 1 до 9.")
+            bot.send_message(msg.chat.id, "❌ Неверное значение. Введи число от 1 до 9.")
             return
 
     db.save_alert_config(msg.chat.id, kp_threshold=kp)
-    await bot.send_message(
+    bot.send_message(
         msg.chat.id,
         "Введи желаемое время ежедневной сводки (HH:MM, например: <code>08:00</code>)\n"
         "или <code>skip</code>:",
@@ -238,18 +235,18 @@ async def _step_alert_kp(msg: types.Message) -> None:
     bot.register_next_step_handler(msg, _step_alert_time)
 
 
-async def _step_alert_time(msg: types.Message) -> None:
+def _step_alert_time(msg: types.Message) -> None:
     alert_time = None
     if msg.text.strip().lower() != "skip":
         try:
             datetime.strptime(msg.text.strip(), "%H:%M")
             alert_time = msg.text.strip()
         except ValueError:
-            await bot.send_message(msg.chat.id, "❌ Неверный формат. Используй HH:MM (например, 08:00).")
+            bot.send_message(msg.chat.id, "❌ Неверный формат. Используй HH:MM (например, 08:00).")
             return
 
     db.save_alert_config(msg.chat.id, alert_time=alert_time)
-    await bot.send_message(
+    bot.send_message(
         msg.chat.id,
         "✅ Настройки уведомлений сохранены!\n\n"
         "Хочешь также указать часовой пояс? Введи его (например: <code>Europe/Minsk</code>) "
@@ -258,14 +255,14 @@ async def _step_alert_time(msg: types.Message) -> None:
     bot.register_next_step_handler(msg, _step_timezone)
 
 
-async def _step_timezone(msg: types.Message) -> None:
+def _step_timezone(msg: types.Message) -> None:
     tz_str = None
     if msg.text.strip().lower() != "skip":
         tz_str = msg.text.strip()
         try:
             pytz.timezone(tz_str)
         except pytz.exceptions.UnknownTimeZoneError:
-            await bot.send_message(
+            bot.send_message(
                 msg.chat.id,
                 f"❌ Часовой пояс «{tz_str}» не найден.\n"
                 "Примеры: <code>Europe/Minsk</code>, <code>Asia/Yekaterinburg</code>",
@@ -275,7 +272,7 @@ async def _step_timezone(msg: types.Message) -> None:
     if tz_str:
         db.upsert_user(msg.chat.id, timezone=tz_str)
 
-    await bot.send_message(
+    bot.send_message(
         msg.chat.id,
         "✅ Все настройки сохранены! Буду присылать сводку вовремя.",
         reply_markup=_main_menu(),
@@ -285,37 +282,37 @@ async def _step_timezone(msg: types.Message) -> None:
 # ─── /report ──────────────────────────────────────────────────────────────────
 
 @bot.message_handler(commands=["report"])
-async def cmd_report(msg: types.Message) -> None:
+def cmd_report(msg: types.Message) -> None:
     report = analytics.generate_monthly_report(msg.chat.id)
-    await bot.send_message(msg.chat.id, report, reply_markup=_main_menu())
+    bot.send_message(msg.chat.id, report, reply_markup=_main_menu())
 
 
 # ─── Геолокация ───────────────────────────────────────────────────────────────
 
 @bot.message_handler(content_types=["location"])
-async def handle_location(msg: types.Message) -> None:
+def handle_location(msg: types.Message) -> None:
     lat = msg.location.latitude
     lon = msg.location.longitude
 
     # Определяем город по координатам
-    city_name = await wx.reverse_geocode(lat, lon) or f"{lat:.4f},{lon:.4f}"
+    city_name = wx.reverse_geocode(lat, lon) or f"{lat:.4f},{lon:.4f}"
     
     # Сбрасываем старый город и сохраняем новый или координаты
     db.upsert_user(msg.chat.id, city=city_name)
 
-    data = await wx.get_weather_by_coords(lat, lon)
+    data = wx.get_weather_by_coords(lat, lon)
     if not data:
-        await bot.send_message(msg.chat.id, "❌ Не удалось получить погоду для этой локации.")
+        bot.send_message(msg.chat.id, "❌ Не удалось получить погоду для этой локации.")
         return
 
     # Отправляем сводку именно для этой локации
     data['city'] = city_name # Переопределяем имя для корректного отображения
     
     # Получаем остальные данные (AQI, KP)
-    aqi_info = await wx.get_aqi(lat, lon)
+    aqi_info = wx.get_aqi(lat, lon)
     aqi_str  = aqi_info["aqi_label"] if aqi_info else "—"
 
-    kp_data = await sw.get_kp_full()
+    kp_data = sw.get_kp_full()
     
     bp_type = "norm"
     user = db.get_user(msg.chat.id)
@@ -344,12 +341,12 @@ async def handle_location(msg: types.Message) -> None:
     ]
     summary = "\n".join(lines)
     
-    await bot.send_message(msg.chat.id, summary, reply_markup=_main_menu())
+    bot.send_message(msg.chat.id, summary, reply_markup=_main_menu())
 
 
 # ─── «🤕 Болит голова» ────────────────────────────────────────────────────────
 
-async def _handle_headache(msg: types.Message) -> None:
+def _handle_headache(msg: types.Message) -> None:
     chat_id = msg.chat.id
     city    = _get_user_city(chat_id)
 
@@ -360,7 +357,7 @@ async def _handle_headache(msg: types.Message) -> None:
     humidity:      Optional[int]   = None
 
     if city:
-        data = await wx.get_full_weather(city)
+        data = wx.get_full_weather(city)
         if data:
             pressure_mmhg = data.get("pressure_mmhg")
             temperature   = data.get("temp")
@@ -368,7 +365,7 @@ async def _handle_headache(msg: types.Message) -> None:
             if data.get("aqi_info"):
                 aqi = data["aqi_info"].get("aqi")
 
-        kp_data = await sw.get_kp_full()
+        kp_data = sw.get_kp_full()
         if kp_data:
             k_index = kp_data["kp"]
 
@@ -376,7 +373,7 @@ async def _handle_headache(msg: types.Message) -> None:
         if pressure_mmhg:
             saw = analytics.check_barometric_saw(chat_id, pressure_mmhg)
             if saw and saw.get("alert"):
-                await bot.send_message(
+                bot.send_message(
                     chat_id,
                     f"⚠️ <b>Барическая пила!</b>\n"
                     f"За последние {saw['hours']} ч давление изменилось на "
@@ -405,7 +402,7 @@ async def _handle_headache(msg: types.Message) -> None:
     if entry_count >= 5:
         lines.append("Нажми «📊 Отчёт», чтобы увидеть личные триггеры.")
 
-    await bot.send_message(chat_id, "\n".join(lines), reply_markup=_main_menu())
+    bot.send_message(chat_id, "\n".join(lines), reply_markup=_main_menu())
 
 
 # ─── Текстовые кнопки главного меню ──────────────────────────────────────────
@@ -413,28 +410,28 @@ async def _handle_headache(msg: types.Message) -> None:
 @bot.message_handler(func=lambda m: m.text in [
     "🌤 Погода", "🌌 Космос", "🤕 Болит голова", "📊 Отчёт", "⚙️ Настройки"
 ])
-async def handle_menu_buttons(msg: types.Message) -> None:
+def handle_menu_buttons(msg: types.Message) -> None:
     text    = msg.text
     chat_id = msg.chat.id
 
     if text == "🌤 Погода":
         city = _get_user_city(chat_id)
         if city:
-            await _send_weather(chat_id, city)
+            _send_weather(chat_id, city)
         else:
-            await bot.send_message(chat_id, "🌍 Введи название города:")
+            bot.send_message(chat_id, "🌍 Введи название города:")
             bot.register_next_step_handler(msg, _step_set_city_and_weather)
 
     elif text == "🌌 Космос":
-        kp_data = await sw.get_kp_full()
+        kp_data = sw.get_kp_full()
         user    = db.get_user(chat_id)
         bp_type = user.get("blood_pressure_type", "norm") if user else "norm"
 
         if not kp_data:
-            await bot.send_message(chat_id, "❌ Не удалось получить данные NOAA. Попробуй позже.")
+            bot.send_message(chat_id, "❌ Не удалось получить данные NOAA. Попробуй позже.")
             return
 
-        forecast_max = await sw.get_max_kp_forecast_24h()
+        forecast_max = sw.get_max_kp_forecast_24h()
         advice       = sw.get_storm_advice(kp_data["kp"], bp_type)
 
         lines = [
@@ -447,14 +444,14 @@ async def handle_menu_buttons(msg: types.Message) -> None:
                 f"Прогноз max Kp (24 ч): {fc_storm['emoji']} <b>{forecast_max} — {fc_storm['label']}</b>"
             )
         lines += ["", f"💬 {advice}"]
-        await bot.send_message(chat_id, "\n".join(lines), reply_markup=_main_menu())
+        bot.send_message(chat_id, "\n".join(lines), reply_markup=_main_menu())
 
     elif text == "🤕 Болит голова":
-        await _handle_headache(msg)
+        _handle_headache(msg)
 
     elif text == "📊 Отчёт":
         report = analytics.generate_monthly_report(chat_id)
-        await bot.send_message(chat_id, report, reply_markup=_main_menu())
+        bot.send_message(chat_id, report, reply_markup=_main_menu())
 
     elif text == "⚙️ Настройки":
         kb = types.InlineKeyboardMarkup()
@@ -465,95 +462,50 @@ async def handle_menu_buttons(msg: types.Message) -> None:
         kb.row(
             types.InlineKeyboardButton("🔄 Сменить город", callback_data="settings_city"),
         )
-        await bot.send_message(chat_id, "⚙️ <b>Настройки</b>\nВыбери раздел:", reply_markup=kb)
+        bot.send_message(chat_id, "⚙️ <b>Настройки</b>\nВыбери раздел:", reply_markup=kb)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("settings_"))
-async def cb_settings(call: types.CallbackQuery) -> None:
+def cb_settings(call: types.CallbackQuery) -> None:
     if call.data == "settings_profile":
-        await bot.answer_callback_query(call.id)
-        await cmd_profile(call.message)
+        bot.answer_callback_query(call.id)
+        cmd_profile(call.message)
     elif call.data == "settings_alerts":
-        await bot.answer_callback_query(call.id)
-        await cmd_alerts(call.message)
+        bot.answer_callback_query(call.id)
+        cmd_alerts(call.message)
     elif call.data == "settings_city":
-        await bot.answer_callback_query(call.id)
-        await bot.send_message(call.message.chat.id, "🌍 Введи новое название города:")
+        bot.answer_callback_query(call.id)
+        bot.send_message(call.message.chat.id, "🌍 Введи новое название города:")
         bot.register_next_step_handler(call.message, _step_set_city_and_weather)
 
 
 # ─── Healthcheck HTTP-сервер (для Koyeb / Railway / Render) ──────────────────
 
-async def health_handler(request):
-    """Возвращает OK для проверки живости сервиса."""
-    return web.Response(text="OK")
+class _HealthHandler(BaseHTTPRequestHandler):
+    """Минимальный HTTP-хэндлер для проверки живости сервиса."""
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):  # noqa: A002
+        pass  # Подавляем стандартный лог HTTP-запросов
 
 
-async def run_http_server(port: int):
-    """Запускает HTTP-сервер healthcheck."""
-    app = web.Application()
-    app.router.add_get("/", health_handler)
-    app.router.add_get("/health", health_handler)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
+def _start_healthcheck(port: int = 8080) -> None:
+    """Запускает HTTP-сервер healthcheck в отдельном потоке."""
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
     logger.info(f"Healthcheck HTTP-сервер запущен на порту {port}")
 
 
-# ─── Self-ping Задача ──────────────────────────────────────────────────────────
-
-async def ping_itself():
-    """Пингует собственный веб-сервер, чтобы PaaS (Koyeb) не усыплял его."""
-    url = config.APP_URL
-    if not url:
-        logger.warning("APP_URL не задан, self-ping отключен.")
-        return
-
-    # Добавляем протокол, если он отсутствует
-    if not url.startswith(("http://", "https://")):
-        url = f"https://{url}"
-
-    logger.info(f"Задача self-ping запущена для {url}")
-    
-    # Ждем немного перед первым пингом, чтобы сервер успел подняться
-    await asyncio.sleep(10)
-
-    while True:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=10) as resp:
-                    logger.info(f"Self-ping {url}: {resp.status}")
-        except Exception as e:
-            logger.error(f"Ошибка при self-ping: {e}")
-        
-        # Пингуем каждые 4 минуты (Koyeb Free усыпляет через 5 минут простоя)
-        await asyncio.sleep(4 * 60)
-
-
 # ─── Запуск ────────────────────────────────────────────────────────────────────
-
-# ─── Запуск ────────────────────────────────────────────────────────────────────
-
-async def main():
-    port = int(os.environ.get("PORT", 8080))
-    
-    # Запускаем планировщик (он тоже должен быть адаптирован под async или запущен в фоне)
-    scheduler.start(bot)
-    
-    logger.info("✅ HeadCare Bot (Async) запущен...")
-    
-    # Запускаем всё параллельно
-    await asyncio.gather(
-        run_http_server(port),
-        bot.infinity_polling(timeout=30),
-        ping_itself(),
-        scheduler.run_scheduler(),
-    )
-
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Бот остановлен пользователем.")
+    import os
+    port = int(os.environ.get("PORT", 8080))
+    _start_healthcheck(port)
+    logger.info("✅ HeadCare Bot запущен...")
+    scheduler.start(bot)
+    bot.infinity_polling(timeout=30, long_polling_timeout=30)
