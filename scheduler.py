@@ -84,8 +84,10 @@ def _is_quiet_hour(chat_id: int) -> bool:
         tz = pytz.UTC
 
     local_hour = datetime.now(tz).hour
-    start_h    = cfg.get("quiet_hour_start", 23)
-    end_h      = cfg.get("quiet_hour_end", 7)
+    start_h = cfg.get("quiet_hour_start")
+    if start_h is None: start_h = 23
+    end_h = cfg.get("quiet_hour_end")
+    if end_h is None: end_h = 7
 
     if start_h > end_h:
         return local_hour >= start_h or local_hour < end_h
