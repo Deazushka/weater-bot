@@ -15,7 +15,7 @@ from typing import Optional
 
 import schedule
 import pytz
-import requests
+import pytz
 
 import db
 import weather as wx
@@ -50,9 +50,6 @@ def start(bot) -> None:
     # Ежедневные сводки — каждую минуту сравниваем HH:MM с настройками пользователей
     schedule.every(1).minutes.do(_job_daily_digests)
 
-    # Self-ping (каждые 4 минуты), чтобы Koyeb не усыплял Web-сервис
-    if config.APP_URL:
-        schedule.every(4).minutes.do(_job_self_ping)
 
     t = threading.Thread(target=_run_loop, daemon=True)
     t.start()
@@ -239,19 +236,4 @@ def _send_daily_digest(chat_id: int) -> None:
     _send_safe(chat_id, "\n".join(lines))
 
 
-def _job_self_ping() -> None:
-    """Пингует собственный веб-сервер, чтобы PaaS (Koyeb) не усыплял его из-за бездействия."""
-    url = config.APP_URL
-    if not url:
-        return
-
-    # Добавляем протокол, если он отсутствует
-    if not url.startswith(("http://", "https://")):
-        url = f"https://{url}"
-
-    try:
-        r = requests.get(url, timeout=5)
-        logger.debug(f"Self-ping {url}: {r.status_code}")
-    except Exception as e:
-        logger.warning(f"Ошибка при self-ping: {e}")
 

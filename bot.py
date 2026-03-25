@@ -7,7 +7,9 @@ bot.py — Точка входа HeadCare Bot (Telegram)
 
 import logging
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import asyncio
+import aiohttp
+from aiohttp import web
 
 import telebot
 from telebot import types
@@ -479,25 +481,60 @@ def cb_settings(call: types.CallbackQuery) -> None:
         bot.register_next_step_handler(call.message, _step_set_city_and_weather)
 
 
-# ─── Healthcheck HTTP-сервер (для Koyeb / Railway / Render) ──────────────────
+# ─── Healthcheck & Self-ping (aiohttp) ────────────────────────────────────────
 
-class _HealthHandler(BaseHTTPRequestHandler):
-    """Минимальный HTTP-хэндлер для проверки живости сервиса."""
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
-
-    def log_message(self, format, *args):  # noqa: A002
-        pass  # Подавляем стандартный лог HTTP-запросов
+async def health_handler(request):
+    """Хэндлер для проверки живости сервиса."""
+    return web.Response(text="OK")
 
 
-def _start_healthcheck(port: int = 8080) -> None:
-    """Запускает HTTP-сервер healthcheck в отдельном потоке."""
-    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
-    t = threading.Thread(target=server.serve_forever, daemon=True)
+async def run_http_server(port: int):
+    """Минимальный HTTP-сервер для Koyeb / Render."""
+    app = web.Application()
+    app.router.add_get("/", health_handler)
+    app.router.add_get("/health", health_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"Health-check HTTP сервер запущен на порту {port}")
+
+
+async def ping_itself():
+    """Фоновая задача для предотвращения засыпания (self-ping)."""
+    url = config.APP_URL
+    if not url:
+        logger.info("APP_URL не задан. Self-ping отключен.")
+        return
+
+    # Добавляем протокол, если он отсутствует
+    if not url.startswith(("http://", "https://")):
+        url = f"https://{url}"
+
+    logger.info(f"Self-ping включен для URL: {url}")
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=10) as response:
+                    logger.info(f"Self-ping {url}: {response.status}")
+        except Exception as e:
+            logger.error(f"Ошибка при self-ping: {e}")
+        await asyncio.sleep(5 * 60)  # Каждые 5 минут
+
+
+def _start_async_background_tasks(port: int) -> None:
+    """Запускает HTTP-сервер и self-ping в отдельном потоке (asyncio)."""
+    def run_loop():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(asyncio.gather(
+            run_http_server(port),
+            ping_itself()
+        ))
+        loop.run_forever()
+
+    t = threading.Thread(target=run_loop, daemon=True)
     t.start()
-    logger.info(f"Healthcheck HTTP-сервер запущен на порту {port}")
 
 
 # ─── Запуск ────────────────────────────────────────────────────────────────────
@@ -505,7 +542,7 @@ def _start_healthcheck(port: int = 8080) -> None:
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 8080))
-    _start_healthcheck(port)
+    _start_async_background_tasks(port)
     logger.info("✅ HeadCare Bot запущен...")
     scheduler.start(bot)
     bot.infinity_polling(timeout=30, long_polling_timeout=30)
