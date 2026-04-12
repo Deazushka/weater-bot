@@ -217,6 +217,23 @@ def _send_daily_digest(chat_id: int) -> None:
             if data.get("aqi_info"):
                 lines.append(f"🍃 Воздух:     <b>{data['aqi_info']['aqi_label']}</b>")
 
+            # Прогноз +3ч / +6ч
+            forecast = wx.get_forecast_by_city(city)
+            if forecast:
+                lines.append("")
+                if len(forecast) >= 1:
+                    fc = forecast[0]
+                    lines.append(
+                        f"🕐 <b>Через 3ч:</b> {fc['temp']}°C · 💧{fc['humidity']}% · "
+                        f"🌬 {fc['wind_speed']} м/с · ⏱ {fc['pressure_mmhg']} мм"
+                    )
+                if len(forecast) >= 2:
+                    fc = forecast[1]
+                    lines.append(
+                        f"🕕 <b>Через 6ч:</b> {fc['temp']}°C · 💧{fc['humidity']}% · "
+                        f"🌬 {fc['wind_speed']} м/с · ⏱ {fc['pressure_mmhg']} мм"
+                    )
+
     lines += ["", f"🌌 Геомагнетизм: <b>{kp_str}</b>"]
 
     if kp_data:

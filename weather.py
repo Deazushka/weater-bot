@@ -136,6 +136,65 @@ def get_weather_by_coords(lat: float, lon: float) -> Optional[dict]:
         return None
 
 
+# ─── Прогноз (3ч / 6ч) ────────────────────────────────────────────────────────
+
+def _parse_forecast(data: dict) -> list[dict]:
+    """
+    Разбирает ответ OWM /forecast — берёт первые 2 записи (+3ч, +6ч).
+
+    Returns:
+        list из 2 словарей с полями weather + dt_txt
+    """
+    items = data.get("list", [])[:2]
+    result = []
+    for item in items:
+        parsed = _parse_weather(item)
+        parsed["dt_txt"] = item.get("dt_txt", "")
+        result.append(parsed)
+    return result
+
+
+def get_forecast_by_city(city: str) -> Optional[list[dict]]:
+    """Возвращает прогноз (+3ч, +6ч) по названию города."""
+    try:
+        resp = requests.get(
+            config.OWM_FORECAST_URL,
+            params={
+                "q":     city,
+                "appid": config.OWM_API_KEY,
+                "units": "metric",
+                "lang":  "ru",
+                "cnt":   2,
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return _parse_forecast(resp.json())
+    except Exception:
+        return None
+
+
+def get_forecast_by_coords(lat: float, lon: float) -> Optional[list[dict]]:
+    """Возвращает прогноз (+3ч, +6ч) по координатам."""
+    try:
+        resp = requests.get(
+            config.OWM_FORECAST_URL,
+            params={
+                "lat":   lat,
+                "lon":   lon,
+                "appid": config.OWM_API_KEY,
+                "units": "metric",
+                "lang":  "ru",
+                "cnt":   2,
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return _parse_forecast(resp.json())
+    except Exception:
+        return None
+
+
 # ─── Качество воздуха ─────────────────────────────────────────────────────────
 
 def get_aqi(lat: float, lon: float) -> Optional[dict]:

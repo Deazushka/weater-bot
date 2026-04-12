@@ -58,8 +58,18 @@ def _get_user_city(chat_id: int) -> Optional[str]:
     return user["city"] if user else None
 
 
+def _forecast_line(label: str, fc: dict) -> str:
+    """Компактная строка прогноза для одной временной точки."""
+    return (
+        f"{label}\n"
+        f"  🌡 {fc['temp']}°C (ощущ. {fc['feels_like']}°C) · "
+        f"💧{fc['humidity']}% · 🌬 {fc['wind_speed']} м/с · "
+        f"⏱ {fc['pressure_mmhg']} мм"
+    )
+
+
 def _weather_summary(city: str, chat_id: Optional[int] = None) -> str:
-    """Формирует HTML-сводку погоды + AQI + Kp."""
+    """Формирует HTML-сводку погоды + AQI + Kp + прогноз +3ч/+6ч."""
     data = wx.get_full_weather(city)
     if not data:
         return f"❌ Не удалось получить погоду для <b>{city}</b>. Проверьте название города."
@@ -93,9 +103,18 @@ def _weather_summary(city: str, chat_id: Optional[int] = None) -> str:
         "",
         f"🍃 Качество воздуха: <b>{aqi_str}</b>",
         f"🌌 Магнитный фон: <b>{kp_str}</b>",
-        "",
-        f"💬 {advice}",
     ]
+
+    # Прогноз +3ч / +6ч
+    forecast = wx.get_forecast_by_city(city)
+    if forecast:
+        lines.append("")
+        if len(forecast) >= 1:
+            lines.append(_forecast_line("🕐 <b>Через 3 часа:</b>", forecast[0]))
+        if len(forecast) >= 2:
+            lines.append(_forecast_line("🕕 <b>Через 6 часов:</b>", forecast[1]))
+
+    lines += ["", f"💬 {advice}"]
     return "\n".join(lines)
 
 
@@ -338,9 +357,18 @@ def handle_location(msg: types.Message) -> None:
         "",
         f"🍃 Качество воздуха: <b>{aqi_str}</b>",
         f"🌌 Магнитный фон: <b>{kp_str}</b>",
-        "",
-        f"💬 {advice}",
     ]
+
+    # Прогноз +3ч / +6ч
+    forecast = wx.get_forecast_by_coords(lat, lon)
+    if forecast:
+        lines.append("")
+        if len(forecast) >= 1:
+            lines.append(_forecast_line("🕐 <b>Через 3 часа:</b>", forecast[0]))
+        if len(forecast) >= 2:
+            lines.append(_forecast_line("🕕 <b>Через 6 часов:</b>", forecast[1]))
+
+    lines += ["", f"💬 {advice}"]
     summary = "\n".join(lines)
     
     bot.send_message(msg.chat.id, summary, reply_markup=_main_menu())

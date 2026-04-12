@@ -23,6 +23,7 @@ OWM_API_KEY: str = os.environ.get("OWM_API_KEY", "")
 OWM_BASE_URL = "https://api.openweathermap.org/data/2.5"
 OWM_GEO_URL  = "http://api.openweathermap.org/geo/1.0"
 OWM_AQI_URL  = "https://api.openweathermap.org/data/2.5/air_pollution"
+OWM_FORECAST_URL = f"{OWM_BASE_URL}/forecast"
 
 # ─── NOAA SWPC API ─────────────────────────────────────────────────────────────
 NOAA_KP_URL      = "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json"
